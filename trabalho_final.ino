@@ -13,10 +13,10 @@ const uint8_t pinAquecedor = 21;
 const uint8_t pinResfriador = 19;
 const uint8_t pinSensor = 5;
 
-char* topicos[] = {"setpoint", "kp", "ki", "kd"};
+char* topicos[] = {"setpoint", "bancada3/kp", "bancada3/ki", "bancada3/kd"};
 
 // Constantes do controlador
-float Kp = 20, Ki = 0.1, Kd = 10;
+float Kp = 20, Ki = 0.1, Kd = 0;
 // Variaveis de ação do controlador
 float P, I, D; 
 
@@ -50,35 +50,39 @@ void connect() {
 
   Serial.println("\nConexão realizada com sucesso");
   Serial.println("Conectando ao servidor MQTT...");
-  while(!client.connect("Bancada3")) {
+  while(!client.connect("Bancada3", "", "")) {
     Serial.print(".");
     delay(1000);
   }
 
   Serial.print("Inscrevendo nos tópicos do MQTT...");
 
-  for (auto i = 0; i <= sizeof(topicos); i++) {
+  for (auto i = 0; i < 4; i++) {
     client.subscribe(topicos[i]);
   }
 
   Serial.println("\nInscrição concluída");
+  delay(100);
 }
 
 void messageReceived(String &topic, String &payload) {
   Serial.println("Incoming: " + topic + " - " + payload);
 
   if (topic == "setpoint") {
-    SP = payload.toInt();
-    somatoria = 0;
+    SP = payload.toFloat();
+    // somatoria = 0;
   }
-  else if (topic == "kp") {
-    Kp = payload.toInt();
+  else if (topic == "bancada3/kp") {
+    Kp = payload.toFloat();
   } 
-  else if (topic == "ki") {
-    Ki = payload.toInt();
+  else if (topic == "bancada3/ki") {
+    Ki = payload.toFloat();
+    if (Ki == 0) {
+      somatoria = 0;
+    }
   }
   else { // kd
-    Kd = payload.toInt();
+    Kd = payload.toFloat();
   }
   
 }
@@ -90,6 +94,8 @@ float fmap(float x, float in_min, float in_max, float out_min, float out_max) {
 
 void setup() {
   Serial.begin(115200);
+
+  Serial.println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
 
   // Configurando WiFi e MQTT
   WiFi.begin(ssid, pass);
@@ -110,7 +116,7 @@ void setup() {
 void loop() {
   // Atualizar MQTT
   client.loop();
-  delay(10);
+  delay(20);
 
   if (!client.connected()) {
     connect();
@@ -137,26 +143,26 @@ void loop() {
     cursor_erros = proximo;
 
     // Calculo da Somatoria dos erros (integral)
-    somatoria += erro;
+    somatoria += erro*Ki;
     
 
     P = Kp*erro; // Ação Proporcional
-    I = Ki*somatoria; // Ação Integral
+    I = somatoria; // Ação Integral
     D = Kd*media; // Ação Derivativa
 
-    alpha = P + I + D;
+    alpha = P + I + D; // MV
 
     alpha = constrain(alpha, -100, 100);
 
     alpha = fmap(alpha, -100, 100, 0, 100);
 
     if (alpha <= 49) {
-      auto duty_resfriador = fmap(alpha, 0, 49, 4095, 1);
+      auto duty_resfriador = fmap(alpha, 0, 49, 4095, 2000);
       ledcWrite(pinResfriador, duty_resfriador);
       ledcWrite(pinAquecedor, 0);
     }
     else if (alpha >= 51) {
-      auto duty_aquecedor = fmap(alpha, 51, 100, 1, 4095);
+      auto duty_aquecedor = fmap(alpha, 51, 100, 2000, 4095);
       ledcWrite(pinAquecedor, duty_aquecedor);
       ledcWrite(pinResfriador, 0);
     }
@@ -167,11 +173,10 @@ void loop() {
 
     char temperatura[80];
     sprintf(temperatura, "%f", tempC);
-  
     client.publish("bancada3/temperatura", temperatura);
-
-    // Limitando a quantidade de prints das informações
-    if ((tempoAtual - tempoAnterior) >= 1000) { 
+  
+    if ((tempoAtual - tempoAnterior) >= 300) {
+ 
       Serial.print("Temperatura: ");
       Serial.println(temperatura);
       
